@@ -46,7 +46,6 @@ public interface Reader {
                         startFetchOffset, maxSize, Optional.empty()));
         FetchRequest.Builder fetchRequest = FetchRequest.Builder.forConsumer(Integer.MAX_VALUE, 0,
                 fetchData).metadata(FetchMetadata.INITIAL);
-
         RequestFuture<ClientResponse> requestFuture = consumerNetworkClient.send(node, fetchRequest);
         consumerNetworkClient.poll(requestFuture);
         if (requestFuture.failed()) {
@@ -55,8 +54,18 @@ public interface Reader {
         return requestFuture.value();
     }
 
-    // This can be easily changed to retry when request from an ISR fails
-    static List<Record> getNextBatch(ConsumerNetworkClient consumerNetworkClient,
+
+    /**
+     * Retrieves the next batch from the brokers. Current implementation try retrieves that data
+     * from the nodes till it successfully fetches
+     * @param consumerNetworkClient
+     * @param topicPartition
+     * @param startFetchOffset start offset inclusive.
+     * @param fetchMaxBytes Maximum size for which data will be retrieved.
+     * @param isrs List of in-sync replica hosts
+     * @return BatchResult. Client should be able to update isrs based on BatchResult.
+     */
+    static BatchResult getNextBatch(ConsumerNetworkClient consumerNetworkClient,
                                             TopicPartition topicPartition,
                                             long startFetchOffset,
                                             int fetchMaxBytes,
@@ -64,10 +73,28 @@ public interface Reader {
         if(isrs.isEmpty()) {
             throw new RuntimeException("isr list is empty");
         }
-
-        ClientResponse response = Reader.sendFetch(consumerNetworkClient, isrs.get(0), topicPartition,
-                startFetchOffset,
-                fetchMaxBytes);
+        ClientResponse response = null;
+        Node successNode = null;
+        Map<Node, Exception> exceptions = new HashMap<>();
+        for(Node isr : isrs) {
+            try {
+                response = Reader.sendFetch(consumerNetworkClient, isr, topicPartition,
+                        startFetchOffset,
+                        fetchMaxBytes);
+                successNode = isr;
+                break;
+            } catch (Exception e ) {
+                exceptions.put(isr, e);
+            }
+        }
+        if (response == null) {
+            throw new RuntimeException("Filed to fetch from nodes " +
+                    Arrays.toString(exceptions
+                            .entrySet()
+                            .stream()
+                            .map( e -> e.getKey().toString() + e.getValue().getMessage())
+                            .toArray()));
+        }
 
         FetchResponse.PartitionData<Records> partitionData =
                 ((FetchResponse<Records>) response.responseBody())
@@ -81,7 +108,7 @@ public interface Reader {
                 response.requestHeader().apiVersion(),
                 IsolationLevel.READ_COMMITTED, false,
                 null);
-        return fetch.fetchRecords(Integer.MAX_VALUE);
+        return new BatchResult(fetch.fetchRecords(Integer.MAX_VALUE), successNode);
     }
 
     /**
@@ -105,10 +132,9 @@ public interface Reader {
      * Read messages from a partition.
      * @param topicPartition Topic and partition.
      * @param startOffset start offset inclusive.
-     * @param endOffset end offset exclusive.
      * @param isrs In-sync replicas of the partition.
      *            It makes sure if any in sync replica is not available then retry the operation with next node
-     * @return Iterator of Records. It only contains committed messages.
+     * @return Iterator of Records. It only contains committed messages from startOffset to latest Offset.
      */
     Iterator<Record> read(TopicPartition topicPartition, long startOffset, List<Node> isrs);
 
@@ -128,6 +154,17 @@ public interface Reader {
      * @return Admin client used by this Reader interface.
      */
     Admin getAdmin();
+
+
+    public class BatchResult {
+
+        public final List<Record> batch;
+        public final Node source;
+        BatchResult(List<Record> batch, Node source){
+            this.batch = batch;
+            this.source = source;
+        }
+    }
 
     class DefaultReader implements Reader {
 

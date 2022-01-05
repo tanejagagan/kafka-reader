@@ -71,10 +71,10 @@ public class KafkaIterator implements Iterator<Record> {
 
     private Record readNext() {
         if (currentPartitionRecords == null) {
-            currentPartitionRecords = getNextBatch(nextOffset, isrs).iterator();
+            currentPartitionRecords = getNextBatch(nextOffset, isrs).batch.iterator();
         }
         if (!currentPartitionRecords.hasNext()) {
-            currentPartitionRecords = getNextBatch(nextOffset, isrs).iterator();
+            currentPartitionRecords = getNextBatch(nextOffset, isrs).batch.iterator();
             if (currentPartitionRecords.hasNext()) {
                 return currentPartitionRecords.next();
             } else {
@@ -85,7 +85,7 @@ public class KafkaIterator implements Iterator<Record> {
         }
     }
 
-    private List<Record> getNextBatch(long requestOffset, List<Node> isrs) {
+    private Reader.BatchResult getNextBatch(long requestOffset, List<Node> isrs) {
         return Reader.getNextBatch(consumerNetworkClient, topicPartition, requestOffset, fetchMaxBytes, isrs);
     }
 
