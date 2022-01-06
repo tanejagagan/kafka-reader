@@ -12,18 +12,20 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.record.Record;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.nio.ByteBuffer;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.*;
 
 public class ReaderTest {
 
@@ -48,7 +50,7 @@ public class ReaderTest {
         List<List<byte[][]>> batches = new ArrayList<>();
         int numBatches = 5;
         for(int batch = 0 ; batch < numBatches; batch ++ ) {
-            List<byte[][]> data = IntStream.range(0, 10).mapToObj(i -> new byte[2][2]).collect(Collectors.toList());
+            List<byte[][]> data = getTestData(0, 10);
             TopicPartition topicPartition = new TopicPartition(topic, 0);
             sendMsg(topicPartition, data);
             batches.add(data);
@@ -62,7 +64,49 @@ public class ReaderTest {
     }
 
     @Test
-    public void testTxn() {
+    public void testParallelFetch() throws ExecutionException, InterruptedException {
+        String topic = getNextTopic();
+        Reader reader = Reader.create(getTestConsumerProperties());
+        createTopic(reader.getAdmin(), topic, 1);
+        TopicPartition topicPartition = new TopicPartition(topic, 0);
+        List<byte[][]> data = getTestData(0, 1000);
+        sendMsg(topicPartition, data);
+        List<CompletableFuture<Void>> result = new ArrayList<>();
+        for(int i = 0 ; i < 1000 ; i ++) {
+            CompletableFuture<Void> f =
+                    CompletableFuture.runAsync( () ->
+                            compareResult(List.of(data), reader.read(topicPartition, 0)));
+            result.add(f);
+        }
+        result.forEach( f -> {
+            try {
+                f.get();
+            } catch (InterruptedException | ExecutionException e) {
+                throw new RuntimeException(e);
+            }
+            assertTrue(!f.isCompletedExceptionally());
+        });
+    }
+
+    @Test
+    public void useStream() throws ExecutionException, InterruptedException {
+        String topic = getNextTopic();
+        Reader reader = Reader.create(getTestConsumerProperties());
+        createTopic(reader.getAdmin(), topic, 1);
+        TopicPartition topicPartition = new TopicPartition(topic, 0);
+        int count = 100;
+        List<byte[][]> data = getTestData(0, 100);
+        sendMsg(topicPartition, data);
+        Iterator<Record> records = reader.read(topicPartition, 0);
+        ByteArrayDeserializer deserializer = new ByteArrayDeserializer();
+        Stream<Record> recordStream = StreamSupport.stream(
+                Spliterators.spliteratorUnknownSize(records, Spliterator.ORDERED), false);
+        long resCount = recordStream.map( r -> Reader.recordToConsumerRecord(deserializer,
+                deserializer, topic, topicPartition.partition(), r)).count();
+        assertEquals((long)count, resCount);
+    }
+    @Test
+    public void tesTxn() {
 
     }
 
@@ -101,6 +145,15 @@ public class ReaderTest {
 
     private KafkaConsumer<byte[], byte[]> createConsumer() {
         return null;
+    }
+
+    private List<byte[][]> getTestData(int start, int end) {
+        return IntStream.range(start, end).mapToObj(i -> {
+            byte[][] result = new byte[2][];
+            result[0] = ("key" + i).getBytes();
+            result[1] = ("value" + i).getBytes();
+            return result;
+        }).collect(Collectors.toList());
     }
 
 

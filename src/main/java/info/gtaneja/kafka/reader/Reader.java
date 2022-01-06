@@ -2,6 +2,7 @@ package info.gtaneja.kafka.reader;
 
 import org.apache.kafka.clients.ClientResponse;
 import org.apache.kafka.clients.admin.*;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.internals.CompletedFetch;
 import org.apache.kafka.clients.consumer.internals.ConsumerNetworkClient;
@@ -12,13 +13,18 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.record.Record;
 import org.apache.kafka.common.record.Records;
+import org.apache.kafka.common.record.TimestampType;
 import org.apache.kafka.common.requests.FetchMetadata;
 import org.apache.kafka.common.requests.FetchRequest;
 import org.apache.kafka.common.requests.FetchResponse;
+import org.apache.kafka.common.serialization.Deserializer;
 
 import java.lang.reflect.Field;
 import java.util.*;
 import java.util.stream.Collectors;
+
+import static org.apache.kafka.clients.consumer.ConsumerRecord.NULL_CHECKSUM;
+import static org.apache.kafka.clients.consumer.ConsumerRecord.NULL_SIZE;
 
 /**
  * Reader allows to read messages from any to any offset.
@@ -109,6 +115,60 @@ public interface Reader {
                 IsolationLevel.READ_COMMITTED, false,
                 null);
         return new BatchResult(fetch.fetchRecords(Integer.MAX_VALUE), successNode);
+    }
+
+    /**
+     *
+     * @param keySerializer
+     * @param valueSerializer
+     * @param topic
+     * @param partition
+     * @param record
+     * @param <K>
+     * @param <V>
+     * @return
+     */
+    static <K, V> ConsumerRecord<K, V> recordToConsumerRecord(Deserializer<K> keySerializer,
+                                                               Deserializer<V> valueSerializer,
+                                                               String topic,
+                                                               int partition,
+                                                               Record record) {
+        K k = null;
+        V v = null;
+        byte[] key = null, value = null;
+        int serializedKeySize = NULL_SIZE;
+        int serializedValueSize = NULL_SIZE;
+        long checksum ;
+        if(record.checksumOrNull() ==null) {
+            checksum = NULL_CHECKSUM;
+        } else {
+            checksum = record.checksumOrNull();
+        }
+
+        if(record.key() != null) {
+            serializedKeySize = record.key().remaining();
+            key = new byte[serializedKeySize];
+            record.key().get(key);
+        }
+
+        if(record.value() != null) {
+            serializedValueSize = record.key().remaining();
+            value = new byte[serializedValueSize];
+            record.value().get(value);
+        }
+
+        v = valueSerializer.deserialize(topic, value);
+        k = keySerializer.deserialize(topic, key);
+
+        return new ConsumerRecord<K, V>(topic,
+                partition,
+                record.offset(),
+                record.timestamp(),
+                TimestampType.NO_TIMESTAMP_TYPE,
+                checksum,
+                serializedKeySize, serializedValueSize,
+                k,
+                v);
     }
 
     /**
