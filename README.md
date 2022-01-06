@@ -1,7 +1,7 @@
 # Kafka Reader
 
 With the reader interface, clients can "manually position" themselves within any topic-partition and read all messages from a specified offset onward. 
-The Reader API for Java enables you to create Reader objects by specifying a topic and partition start offset and optional end offset.
+The Reader API for Java enables you to create Reader objects by specifying a topic-partition, start offset and optional end offset.
 Default end offset is the latest offset available at the time of invocation of read method. API also support manually specifying end offset.
 
 ```
